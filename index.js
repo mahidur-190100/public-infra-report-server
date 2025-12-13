@@ -7,8 +7,7 @@ app.use(express.json());
 require("dotenv").config();
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
-const uri =
-  `mongodb+srv://${process.env.DB_USERNAME}:${process.env.DB_PASSWORD}@cluster0.zuity7f.mongodb.net/?appName=Cluster0`;
+const uri = `mongodb+srv://${process.env.DB_USERNAME}:${process.env.DB_PASSWORD}@cluster0.zuity7f.mongodb.net/?appName=Cluster0`;
 
 const client = new MongoClient(uri, {
   serverApi: {
@@ -27,6 +26,8 @@ async function run() {
 
     console.log("Connected to MongoDB successfully!");
 
+    // ========== TEST ENDPOINTS ==========
+
     // Test endpoint
     app.get("/test", (req, res) => {
       res.send({
@@ -34,79 +35,6 @@ async function run() {
         message: "Server is running",
         timestamp: new Date().toISOString(),
       });
-    });
-
-    // ADD THESE TWO NEW ENDPOINTS FOR DEBUGGING:
-    // Endpoint to update user role
-    app.post("/update-role", async (req, res) => {
-      try {
-        const { email, role } = req.body;
-        
-        console.log(`Updating ${email} role to: ${role}`);
-        
-        if (!email || !role) {
-          return res.status(400).send({
-            success: false,
-            message: "Email and role are required",
-          });
-        }
-
-        const result = await userCollection.updateOne(
-          { email: email },
-          { $set: { role: role } }
-        );
-
-        if (result.matchedCount === 0) {
-          return res.status(404).send({
-            success: false,
-            message: "User not found",
-          });
-        }
-
-        res.send({
-          success: true,
-          message: `Role updated to ${role} for ${email}`,
-          modifiedCount: result.modifiedCount,
-        });
-      } catch (error) {
-        console.error("Error updating role:", error);
-        res.status(500).send({
-          success: false,
-          message: "Failed to update role",
-        });
-      }
-    });
-
-    // Endpoint to check user role
-    app.get("/check-role/:email", async (req, res) => {
-      try {
-        const { email } = req.params;
-        
-        console.log(`Checking role for: ${email}`);
-        
-        const user = await userCollection.findOne({ email: email });
-
-        if (!user) {
-          return res.status(404).send({
-            success: false,
-            message: "User not found",
-          });
-        }
-
-        res.send({
-          success: true,
-          email: user.email,
-          role: user.role || "user",
-          displayName: user.displayName,
-          createdAt: user.createdAt,
-        });
-      } catch (error) {
-        console.error("Error checking role:", error);
-        res.status(500).send({
-          success: false,
-          message: "Failed to check role",
-        });
-      }
     });
 
     // Test MongoDB connection
@@ -139,6 +67,93 @@ async function run() {
       }
     });
 
+    // ========== USER MANAGEMENT ENDPOINTS ==========
+
+    // Update user role endpoint
+    app.post("/update-role", async (req, res) => {
+      try {
+        const { email, role } = req.body;
+
+        console.log(`Updating ${email} role to: ${role}`);
+
+        if (!email || !role) {
+          return res.status(400).send({
+            success: false,
+            message: "Email and role are required",
+          });
+        }
+
+        // Check if user exists
+        const user = await userCollection.findOne({ email: email });
+        if (!user) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        // Update the user role
+        const result = await userCollection.updateOne(
+          { email: email },
+          { 
+            $set: { 
+              role: role, 
+              updatedAt: new Date().toISOString() 
+            } 
+          }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        res.send({
+          success: true,
+          message: `Role updated to ${role} for ${email}`,
+          modifiedCount: result.modifiedCount,
+        });
+      } catch (error) {
+        console.error("Error updating role:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to update role",
+        });
+      }
+    });
+
+    // Endpoint to check user role
+    app.get("/check-role/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+
+        const user = await userCollection.findOne({ email: email });
+
+        if (!user) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        res.send({
+          success: true,
+          email: user.email,
+          role: user.role || "user",
+          displayName: user.displayName,
+          createdAt: user.createdAt,
+        });
+      } catch (error) {
+        console.error("Error checking role:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to check role",
+        });
+      }
+    });
+
     // ========== USER ENDPOINTS ==========
 
     // Create new user (signup)
@@ -147,7 +162,6 @@ async function run() {
         const user = req.body;
         console.log("Creating new user:", user.email);
 
-        // Validate required fields
         if (!user.email) {
           return res.status(400).send({
             success: false,
@@ -190,11 +204,62 @@ async function run() {
       }
     });
 
+    // User validation endpoint
+    app.post("/validate-user", async (req, res) => {
+      try {
+        const { email, uid } = req.body;
+
+        console.log(`🔍 Validating user: ${email}, UID: ${uid}`);
+
+        if (!email) {
+          return res.status(400).send({
+            success: false,
+            message: "Email is required",
+          });
+        }
+
+        const user = await userCollection.findOne({ email: email });
+
+        if (!user) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+            valid: false,
+          });
+        }
+
+        // Check if UID matches (optional security check)
+        if (uid && user.uid && user.uid !== uid) {
+          console.log(`⚠️ UID mismatch for ${email}`);
+          return res.send({
+            success: true,
+            valid: false,
+            message: "User session invalid",
+          });
+        }
+
+        res.send({
+          success: true,
+          valid: true,
+          user: {
+            email: user.email,
+            role: user.role || "user",
+            displayName: user.displayName,
+          },
+        });
+      } catch (error) {
+        console.error("Error validating user:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to validate user",
+        });
+      }
+    });
+
     // Get user by email
     app.get("/users/:email", async (req, res) => {
       try {
         const { email } = req.params;
-        console.log("Fetching user by email:", email);
 
         const user = await userCollection.findOne({ email: email });
 
@@ -244,8 +309,6 @@ async function run() {
         const { email } = req.params;
         const updates = req.body;
 
-        console.log("Updating user:", email, "with:", updates);
-
         updates.updatedAt = new Date().toISOString();
 
         const result = await userCollection.updateOne(
@@ -275,14 +338,12 @@ async function run() {
 
     // ========== ISSUE ENDPOINTS ==========
 
-    // Get all issues - FIXED: Return structured response
+    // Get all issues
     app.get("/issues", async (req, res) => {
       try {
         const cursor = issuesCollection.find();
         const result = await cursor.toArray();
-        console.log("Total issues in DB:", result.length);
 
-        // ✅ Return structured response for consistency
         res.send({
           success: true,
           count: result.length,
@@ -301,7 +362,6 @@ async function run() {
     app.get("/my-issues", async (req, res) => {
       try {
         const userEmail = req.query.email;
-        console.log("Fetching my-issues for:", userEmail);
 
         if (!userEmail) {
           return res.status(400).send({
@@ -310,18 +370,12 @@ async function run() {
           });
         }
 
-        // Find issues by userEmail OR reportedBy
         const query = {
-          $or: [
-            { userEmail: userEmail },
-            { reportedBy: userEmail },
-          ],
+          $or: [{ userEmail: userEmail }, { reportedBy: userEmail }],
         };
 
         const result = await issuesCollection.find(query).toArray();
 
-        console.log(`Found ${result.length} issues for user: ${userEmail}`);
-        
         res.send({
           success: true,
           count: result.length,
@@ -340,9 +394,7 @@ async function run() {
     app.post("/issues", async (req, res) => {
       try {
         const issueData = req.body;
-        console.log("Received issue data:", JSON.stringify(issueData, null, 2));
 
-        // Validate required fields
         const requiredFields = ["title", "description", "category", "location"];
         const missingFields = requiredFields.filter(
           (field) => !issueData[field]
@@ -355,17 +407,13 @@ async function run() {
           });
         }
 
-        // Generate unique ID if not provided
         if (!issueData._id) {
           issueData._id = new ObjectId().toString();
         }
 
-        // Current timestamp
         const currentTime = new Date().toISOString();
 
-        // Prepare complete data for MongoDB
         const completeIssueData = {
-          // From form
           _id: issueData._id,
           title: issueData.title,
           description: issueData.description,
@@ -373,8 +421,6 @@ async function run() {
           location: issueData.location,
           reportedBy: issueData.reportedBy || issueData.reporterName || "User",
           userEmail: issueData.userEmail || issueData.email || "",
-
-          // Auto-generated fields
           status: issueData.status || "pending",
           priority: issueData.priority || "normal",
           image:
@@ -390,8 +436,6 @@ async function run() {
           latitude: issueData.latitude || null,
           longitude: issueData.longitude || null,
           comments: [],
-
-          // Timeline for tracking
           timeline: [
             {
               status: "pending",
@@ -402,8 +446,6 @@ async function run() {
             },
           ],
         };
-
-        console.log("Saving to MongoDB:", completeIssueData);
 
         const result = await issuesCollection.insertOne(completeIssueData);
 
@@ -427,7 +469,6 @@ async function run() {
     app.get("/issues/:id", async (req, res) => {
       try {
         const { id } = req.params;
-        console.log("Looking for issue with ID:", id);
 
         const issue = await issuesCollection.findOne({ _id: id });
 
@@ -457,7 +498,6 @@ async function run() {
     app.delete("/issues/:id", async (req, res) => {
       try {
         const { id } = req.params;
-        console.log("Deleting issue with ID:", id);
 
         const result = await issuesCollection.deleteOne({ _id: id });
 
@@ -486,8 +526,6 @@ async function run() {
       try {
         const { id } = req.params;
         const updates = req.body;
-
-        console.log("Updating issue:", id, "with:", updates);
 
         updates.updatedAt = new Date().toISOString();
 
@@ -529,7 +567,6 @@ async function run() {
           });
         }
 
-        // Find the issue
         const issue = await issuesCollection.findOne({ _id: id });
 
         if (!issue) {
@@ -539,15 +576,12 @@ async function run() {
           });
         }
 
-        // Initialize upvotedBy array if it doesn't exist
         const currentUpvotedBy = issue.upvotedBy || [];
 
         let updatedIssue;
         let hasUpvoted;
 
-        // Check if user already upvoted
         if (currentUpvotedBy.includes(userId)) {
-          // Remove upvote - user clicked again
           updatedIssue = await issuesCollection.findOneAndUpdate(
             { _id: id },
             {
@@ -558,7 +592,6 @@ async function run() {
           );
           hasUpvoted = false;
         } else {
-          // Add upvote
           updatedIssue = await issuesCollection.findOneAndUpdate(
             { _id: id },
             {
@@ -588,7 +621,6 @@ async function run() {
     app.get("/issues/user/:email", async (req, res) => {
       try {
         const { email } = req.params;
-        console.log("Searching issues for user:", email);
 
         const query = {
           $or: [{ userEmail: email }, { reportedBy: email }],
@@ -663,8 +695,8 @@ app.get("/", (req, res) => {
       myIssues: "GET /my-issues?email=user@example.com",
       upvote: "POST /issues/:id/upvote",
       stats: "GET /issues-stats",
-      updateRole: "POST /update-role",  // Added
-      checkRole: "GET /check-role/:email"  // Added
+      updateRole: "POST /update-role",
+      checkRole: "GET /check-role/:email",
     },
   });
 });
