@@ -9,6 +9,8 @@ require("dotenv").config();
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const uri = `mongodb+srv://${process.env.DB_USERNAME}:${process.env.DB_PASSWORD}@cluster0.zuity7f.mongodb.net/?appName=Cluster0`;
 
+const stripe = require("stripe")(process.env.STRIPE_SECRET);
+
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -23,12 +25,11 @@ async function run() {
     const db = client.db("public-infra-report-server");
     const issuesCollection = db.collection("all-issues");
     const userCollection = db.collection("users");
+    const paymentsCollection = db.collection("payments"); // New collection for payments
 
     console.log("Connected to MongoDB successfully!");
 
     // ========== TEST ENDPOINTS ==========
-
-    // Test endpoint
     app.get("/test", (req, res) => {
       res.send({
         success: true,
@@ -37,7 +38,6 @@ async function run() {
       });
     });
 
-    // Test MongoDB connection
     app.get("/test-mongo", async (req, res) => {
       try {
         const testDoc = {
@@ -67,9 +67,189 @@ async function run() {
       }
     });
 
+    // ========== PAYMENT MANAGEMENT ENDPOINTS ==========
+
+    // Create a new payment record
+    app.post("/create-payment", async (req, res) => {
+      try {
+        const paymentData = req.body;
+        
+        console.log("📱 Creating payment record for:", paymentData.userEmail);
+        
+        // Validate required fields
+        if (!paymentData.userEmail || !paymentData.amount || !paymentData.planType) {
+          return res.status(400).send({
+            success: false,
+            message: "User email, amount, and plan type are required"
+          });
+        }
+
+        // Generate unique IDs
+        const paymentId = new ObjectId().toString();
+        const invoiceNumber = `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+        const transactionId = `TXN${Date.now()}${paymentData.userEmail.substring(0, 4).toUpperCase()}`;
+
+        // Calculate subscription dates
+        const startDate = new Date();
+        const endDate = new Date();
+        
+        if (paymentData.planType === "yearly") {
+          endDate.setFullYear(endDate.getFullYear() + 1);
+        } else {
+          endDate.setMonth(endDate.getMonth() + 1);
+        }
+
+        // Create complete payment document
+        const completePaymentData = {
+          _id: paymentId,
+          userId: paymentData.userId || paymentData.userEmail,
+          userName: paymentData.userName || paymentData.userEmail.split("@")[0],
+          userEmail: paymentData.userEmail,
+          userPhone: paymentData.userPhone || "",
+          userRole: paymentData.userRole || "user",
+          plan: paymentData.planType === "yearly" ? "Yearly Premium" : "Monthly Premium",
+          amount: parseInt(paymentData.amount) || (paymentData.planType === "yearly" ? 4999 : 499),
+          currency: "INR",
+          status: "completed",
+          paymentMethod: paymentData.paymentMethod || "Card",
+          cardLastFour: paymentData.cardLastFour || null,
+          transactionId: transactionId,
+          invoiceNumber: invoiceNumber,
+          paymentDate: new Date().toISOString(),
+          subscriptionStart: startDate.toISOString(),
+          subscriptionEnd: endDate.toISOString(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          metadata: paymentData.metadata || {}
+        };
+
+        // Save to payments collection
+        const paymentResult = await paymentsCollection.insertOne(completePaymentData);
+        
+        // Update user record with premium status
+        await userCollection.updateOne(
+          { email: paymentData.userEmail },
+          { 
+            $set: { 
+              isPremium: true,
+              subscriptionType: paymentData.planType,
+              subscriptionStart: startDate.toISOString(),
+              subscriptionEnd: endDate.toISOString(),
+              lastPayment: new Date().toISOString(),
+              paymentMethod: paymentData.paymentMethod || "Card",
+              updatedAt: new Date().toISOString()
+            } 
+          }
+        );
+
+        console.log(`✅ Payment recorded successfully for ${paymentData.userEmail}`);
+        console.log(`💰 Amount: ₹${completePaymentData.amount}`);
+        console.log(`📋 Invoice: ${invoiceNumber}`);
+
+        res.send({
+          success: true,
+          message: "Payment recorded successfully",
+          paymentId: paymentResult.insertedId,
+          invoiceNumber: invoiceNumber,
+          transactionId: transactionId,
+          payment: completePaymentData
+        });
+      } catch (error) {
+        console.error("❌ Error creating payment:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to record payment",
+          error: error.message
+        });
+      }
+    });
+
+    // Get all payments (for admin)
+    app.get("/payments", async (req, res) => {
+      try {
+        const cursor = paymentsCollection.find().sort({ paymentDate: -1 });
+        const payments = await cursor.toArray();
+
+        res.send({
+          success: true,
+          count: payments.length,
+          payments: payments
+        });
+      } catch (error) {
+        console.error("Error fetching payments:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch payments"
+        });
+      }
+    });
+
+    // Get payments by user email
+    app.get("/payments/user/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+        
+        const cursor = paymentsCollection.find({ userEmail: email }).sort({ paymentDate: -1 });
+        const payments = await cursor.toArray();
+
+        res.send({
+          success: true,
+          count: payments.length,
+          payments: payments
+        });
+      } catch (error) {
+        console.error("Error fetching user payments:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch user payments"
+        });
+      }
+    });
+
+    // Get payment statistics
+    app.get("/payments/stats", async (req, res) => {
+      try {
+        const totalPayments = await paymentsCollection.countDocuments();
+        const completedPayments = await paymentsCollection.countDocuments({ status: "completed" });
+        
+        // Calculate total revenue
+        const cursor = paymentsCollection.find({ status: "completed" });
+        const allPayments = await cursor.toArray();
+        const totalRevenue = allPayments.reduce((sum, payment) => sum + (payment.amount || 0), 0);
+        
+        // Get today's payments
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        
+        const todayPayments = await paymentsCollection.countDocuments({
+          paymentDate: {
+            $gte: today.toISOString(),
+            $lt: tomorrow.toISOString()
+          }
+        });
+
+        res.send({
+          success: true,
+          stats: {
+            total: totalPayments,
+            completed: completedPayments,
+            totalRevenue: totalRevenue,
+            today: todayPayments
+          }
+        });
+      } catch (error) {
+        console.error("Error fetching payment stats:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch payment statistics"
+        });
+      }
+    });
+
     // ========== USER MANAGEMENT ENDPOINTS ==========
 
-    // Update user role endpoint
     app.post("/update-role", async (req, res) => {
       try {
         const { email, role } = req.body;
@@ -83,7 +263,6 @@ async function run() {
           });
         }
 
-        // Check if user exists
         const user = await userCollection.findOne({ email: email });
         if (!user) {
           return res.status(404).send({
@@ -92,14 +271,13 @@ async function run() {
           });
         }
 
-        // Update the user role
         const result = await userCollection.updateOne(
           { email: email },
-          { 
-            $set: { 
-              role: role, 
-              updatedAt: new Date().toISOString() 
-            } 
+          {
+            $set: {
+              role: role,
+              updatedAt: new Date().toISOString(),
+            },
           }
         );
 
@@ -124,7 +302,6 @@ async function run() {
       }
     });
 
-    // Endpoint to check user role
     app.get("/check-role/:email", async (req, res) => {
       try {
         const { email } = req.params;
@@ -156,7 +333,6 @@ async function run() {
 
     // ========== USER ENDPOINTS ==========
 
-    // Create new user (signup)
     app.post("/users", async (req, res) => {
       try {
         const user = req.body;
@@ -169,7 +345,6 @@ async function run() {
           });
         }
 
-        // Check if user already exists
         const existingUser = await userCollection.findOne({
           email: user.email,
         });
@@ -181,8 +356,8 @@ async function run() {
           });
         }
 
-        // Add default values
         user.role = user.role || "user";
+        user.isPremium = false;
         user.createdAt = new Date().toISOString();
         user.updatedAt = new Date().toISOString();
 
@@ -204,7 +379,6 @@ async function run() {
       }
     });
 
-    // User validation endpoint
     app.post("/validate-user", async (req, res) => {
       try {
         const { email, uid } = req.body;
@@ -228,7 +402,6 @@ async function run() {
           });
         }
 
-        // Check if UID matches (optional security check)
         if (uid && user.uid && user.uid !== uid) {
           console.log(`⚠️ UID mismatch for ${email}`);
           return res.send({
@@ -245,6 +418,7 @@ async function run() {
             email: user.email,
             role: user.role || "user",
             displayName: user.displayName,
+            isPremium: user.isPremium || false,
           },
         });
       } catch (error) {
@@ -256,7 +430,6 @@ async function run() {
       }
     });
 
-    // Get user by email
     app.get("/users/:email", async (req, res) => {
       try {
         const { email } = req.params;
@@ -283,7 +456,6 @@ async function run() {
       }
     });
 
-    // Get all users (admin only)
     app.get("/users", async (req, res) => {
       try {
         const cursor = userCollection.find();
@@ -303,7 +475,6 @@ async function run() {
       }
     });
 
-    // Update user by email
     app.patch("/users/:email", async (req, res) => {
       try {
         const { email } = req.params;
@@ -338,7 +509,6 @@ async function run() {
 
     // ========== ISSUE ENDPOINTS ==========
 
-    // Get all issues
     app.get("/issues", async (req, res) => {
       try {
         const cursor = issuesCollection.find();
@@ -358,7 +528,6 @@ async function run() {
       }
     });
 
-    // Get my issues by user email
     app.get("/my-issues", async (req, res) => {
       try {
         const userEmail = req.query.email;
@@ -390,7 +559,6 @@ async function run() {
       }
     });
 
-    // Submit new issue
     app.post("/issues", async (req, res) => {
       try {
         const issueData = req.body;
@@ -465,7 +633,6 @@ async function run() {
       }
     });
 
-    // GET single issue by ID
     app.get("/issues/:id", async (req, res) => {
       try {
         const { id } = req.params;
@@ -494,7 +661,6 @@ async function run() {
       }
     });
 
-    // DELETE issue by ID
     app.delete("/issues/:id", async (req, res) => {
       try {
         const { id } = req.params;
@@ -521,7 +687,6 @@ async function run() {
       }
     });
 
-    // UPDATE issue by ID
     app.patch("/issues/:id", async (req, res) => {
       try {
         const { id } = req.params;
@@ -554,7 +719,6 @@ async function run() {
       }
     });
 
-    // UPVOTE endpoint - toggle upvote
     app.post("/issues/:id/upvote", async (req, res) => {
       try {
         const { id } = req.params;
@@ -617,7 +781,6 @@ async function run() {
       }
     });
 
-    // Search issues by user email
     app.get("/issues/user/:email", async (req, res) => {
       try {
         const { email } = req.params;
@@ -643,7 +806,6 @@ async function run() {
       }
     });
 
-    // Get issue statistics
     app.get("/issues-stats", async (req, res) => {
       try {
         const totalIssues = await issuesCollection.countDocuments();
@@ -690,6 +852,7 @@ app.get("/", (req, res) => {
     endpoints: {
       test: "GET /test",
       users: "POST /users, GET /users, GET /users/:email",
+      payments: "POST /create-payment, GET /payments, GET /payments/user/:email, GET /payments/stats",
       issues:
         "GET /issues, POST /issues, GET /issues/:id, DELETE /issues/:id, PATCH /issues/:id",
       myIssues: "GET /my-issues?email=user@example.com",
