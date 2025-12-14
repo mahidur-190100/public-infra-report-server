@@ -67,6 +67,287 @@ async function run() {
       }
     });
 
+    // ========== USER AUTHENTICATION & DASHBOARD ROUTING ==========
+
+    // Get user dashboard info based on role
+    app.get("/user-dashboard-info/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+
+        const user = await userCollection.findOne({ email: email });
+
+        if (!user) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        // Determine dashboard type based on role
+        let dashboardType = "user"; // Default
+        let redirectPath = "/dashboard";
+        
+        if (user.role === "admin") {
+          dashboardType = "admin";
+          redirectPath = "/dashboard/admin";
+        } else if (user.role === "staff") {
+          dashboardType = "staff";
+          redirectPath = "/dashboard/staff";
+        }
+
+        res.send({
+          success: true,
+          user: {
+            email: user.email,
+            role: user.role || "user",
+            displayName: user.displayName,
+            isPremium: user.isPremium || false,
+            createdAt: user.createdAt,
+          },
+          dashboard: {
+            type: dashboardType,
+            redirectPath: redirectPath,
+            shouldRedirect: dashboardType !== "user"
+          }
+        });
+      } catch (error) {
+        console.error("Error fetching user dashboard info:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch user dashboard info",
+        });
+      }
+    });
+
+    // Validate user and return proper dashboard info
+    app.post("/validate-user", async (req, res) => {
+      try {
+        const { email, uid } = req.body;
+
+        console.log(`🔍 Validating user: ${email}, UID: ${uid}`);
+
+        if (!email) {
+          return res.status(400).send({
+            success: false,
+            message: "Email is required",
+          });
+        }
+
+        const user = await userCollection.findOne({ email: email });
+
+        if (!user) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+            valid: false,
+          });
+        }
+
+        if (uid && user.uid && user.uid !== uid) {
+          console.log(`⚠️ UID mismatch for ${email}`);
+          return res.send({
+            success: true,
+            valid: false,
+            message: "User session invalid",
+          });
+        }
+
+        // Determine dashboard type based on role
+        let dashboardType = "user";
+        let redirectPath = "/dashboard";
+        
+        if (user.role === "admin") {
+          dashboardType = "admin";
+          redirectPath = "/dashboard/admin";
+        } else if (user.role === "staff") {
+          dashboardType = "staff";
+          redirectPath = "/dashboard/staff";
+        }
+
+        res.send({
+          success: true,
+          valid: true,
+          user: {
+            email: user.email,
+            role: user.role || "user",
+            displayName: user.displayName,
+            isPremium: user.isPremium || false,
+            name: user.name || user.displayName,
+            id: user._id || email,
+            createdAt: user.createdAt,
+          },
+          dashboard: {
+            type: dashboardType,
+            redirectPath: redirectPath,
+            shouldRedirect: dashboardType !== "user"
+          }
+        });
+      } catch (error) {
+        console.error("Error validating user:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to validate user",
+        });
+      }
+    });
+
+    // Get user's assigned issues (for staff dashboard)
+    app.get("/staff/issues", async (req, res) => {
+      try {
+        const { staffEmail, staffId } = req.query;
+
+        if (!staffEmail && !staffId) {
+          return res.status(400).send({
+            success: false,
+            message: "Staff email or ID is required",
+          });
+        }
+
+        // Build query to find issues assigned to this staff
+        let query = {};
+        
+        if (staffId) {
+          // If staffId is provided (could be email or actual ID)
+          query = {
+            $or: [
+              { assignedTo: staffId },
+              { "assignedTo.id": staffId },
+              { "assignedTo.email": staffEmail }
+            ]
+          };
+        } else if (staffEmail) {
+          query = {
+            $or: [
+              { assignedTo: staffEmail },
+              { "assignedTo.email": staffEmail }
+            ]
+          };
+        }
+
+        const cursor = issuesCollection.find(query);
+        const issues = await cursor.toArray();
+
+        res.send({
+          success: true,
+          count: issues.length,
+          issues: issues
+        });
+      } catch (error) {
+        console.error("Error fetching staff issues:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch staff issues",
+        });
+      }
+    });
+
+    // Get staff dashboard statistics
+    app.get("/staff/dashboard-stats", async (req, res) => {
+      try {
+        const { staffEmail, staffId } = req.query;
+
+        if (!staffEmail && !staffId) {
+          return res.status(400).send({
+            success: false,
+            message: "Staff email or ID is required",
+          });
+        }
+
+        // Build query to find issues assigned to this staff
+        let query = {};
+        
+        if (staffId) {
+          query = {
+            $or: [
+              { assignedTo: staffId },
+              { "assignedTo.id": staffId },
+              { "assignedTo.email": staffEmail }
+            ]
+          };
+        } else if (staffEmail) {
+          query = {
+            $or: [
+              { assignedTo: staffEmail },
+              { "assignedTo.email": staffEmail }
+            ]
+          };
+        }
+
+        const allIssues = await issuesCollection.find(query).toArray();
+        const totalIssues = allIssues.length;
+        
+        // Calculate stats
+        const pendingIssues = allIssues.filter(issue => 
+          issue.status && issue.status.toLowerCase() === 'pending'
+        ).length;
+        
+        const resolvedIssues = allIssues.filter(issue => 
+          issue.status && issue.status.toLowerCase() === 'resolved'
+        ).length;
+        
+        const inProgressIssues = allIssues.filter(issue => 
+          issue.status && (issue.status.toLowerCase() === 'in-progress' || issue.status.toLowerCase() === 'in progress')
+        ).length;
+        
+        // Today's tasks (issues created today or due today)
+        const today = new Date().toISOString().split('T')[0];
+        const todaysTasks = allIssues.filter(issue => {
+          const createdDate = new Date(issue.createdAt || issue.reportedAt).toISOString().split('T')[0];
+          const dueDate = issue.dueDate ? new Date(issue.dueDate).toISOString().split('T')[0] : null;
+          return createdDate === today || dueDate === today;
+        }).length;
+
+        // Weekly resolved (last 7 days)
+        const oneWeekAgo = new Date();
+        oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+        const weeklyResolved = allIssues.filter(issue => {
+          if (issue.status && issue.status.toLowerCase() === 'resolved') {
+            const resolvedDate = issue.resolvedAt ? new Date(issue.resolvedAt) : new Date(issue.updatedAt);
+            return resolvedDate >= oneWeekAgo;
+          }
+          return false;
+        }).length;
+
+        // Calculate average resolution time
+        let totalResolutionTime = 0;
+        let resolvedCount = 0;
+        
+        allIssues.forEach(issue => {
+          if (issue.status && issue.status.toLowerCase() === 'resolved' && 
+              (issue.createdAt || issue.reportedAt) && issue.resolvedAt) {
+            const created = new Date(issue.createdAt || issue.reportedAt);
+            const resolved = new Date(issue.resolvedAt);
+            const diffTime = Math.abs(resolved - created);
+            const diffDays = diffTime / (1000 * 60 * 60 * 24);
+            totalResolutionTime += diffDays;
+            resolvedCount++;
+          }
+        });
+        
+        const averageResolutionTime = resolvedCount > 0 ? 
+          (totalResolutionTime / resolvedCount).toFixed(1) : 0;
+
+        res.send({
+          success: true,
+          stats: {
+            assignedIssues: totalIssues,
+            pendingIssues: pendingIssues,
+            resolvedIssues: resolvedIssues,
+            inProgressIssues: inProgressIssues,
+            todaysTasks: todaysTasks,
+            weeklyResolved: weeklyResolved,
+            averageResolutionTime: averageResolutionTime
+          }
+        });
+      } catch (error) {
+        console.error("Error fetching staff dashboard stats:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch staff dashboard statistics",
+        });
+      }
+    });
+
     // ========== PAYMENT MANAGEMENT ENDPOINTS ==========
 
     // Create a new payment record
@@ -288,10 +569,19 @@ async function run() {
           });
         }
 
+        // Get updated user info
+        const updatedUser = await userCollection.findOne({ email: email });
+
         res.send({
           success: true,
           message: `Role updated to ${role} for ${email}`,
           modifiedCount: result.modifiedCount,
+          user: {
+            email: updatedUser.email,
+            role: updatedUser.role,
+            displayName: updatedUser.displayName,
+            dashboardType: role === "staff" ? "staff" : role === "admin" ? "admin" : "user"
+          }
         });
       } catch (error) {
         console.error("Error updating role:", error);
@@ -321,6 +611,7 @@ async function run() {
           role: user.role || "user",
           displayName: user.displayName,
           createdAt: user.createdAt,
+          dashboardType: user.role === "staff" ? "staff" : user.role === "admin" ? "admin" : "user"
         });
       } catch (error) {
         console.error("Error checking role:", error);
@@ -375,57 +666,6 @@ async function run() {
           success: false,
           message: "Failed to create user",
           error: error.message,
-        });
-      }
-    });
-
-    app.post("/validate-user", async (req, res) => {
-      try {
-        const { email, uid } = req.body;
-
-        console.log(`🔍 Validating user: ${email}, UID: ${uid}`);
-
-        if (!email) {
-          return res.status(400).send({
-            success: false,
-            message: "Email is required",
-          });
-        }
-
-        const user = await userCollection.findOne({ email: email });
-
-        if (!user) {
-          return res.status(404).send({
-            success: false,
-            message: "User not found",
-            valid: false,
-          });
-        }
-
-        if (uid && user.uid && user.uid !== uid) {
-          console.log(`⚠️ UID mismatch for ${email}`);
-          return res.send({
-            success: true,
-            valid: false,
-            message: "User session invalid",
-          });
-        }
-
-        res.send({
-          success: true,
-          valid: true,
-          user: {
-            email: user.email,
-            role: user.role || "user",
-            displayName: user.displayName,
-            isPremium: user.isPremium || false,
-          },
-        });
-      } catch (error) {
-        console.error("Error validating user:", error);
-        res.status(500).send({
-          success: false,
-          message: "Failed to validate user",
         });
       }
     });
@@ -503,6 +743,26 @@ async function run() {
         res.status(500).send({
           success: false,
           message: "Failed to update user",
+        });
+      }
+    });
+
+    // Get all staff members
+    app.get("/staff", async (req, res) => {
+      try {
+        const cursor = userCollection.find({ role: "staff" });
+        const staffMembers = await cursor.toArray();
+
+        res.send({
+          success: true,
+          count: staffMembers.length,
+          staff: staffMembers,
+        });
+      } catch (error) {
+        console.error("Error fetching staff:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch staff",
         });
       }
     });
@@ -719,6 +979,145 @@ async function run() {
       }
     });
 
+    // Assign issue to staff
+    app.post("/issues/:id/assign", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { staffId, staffName, staffEmail } = req.body;
+
+        if (!staffId || !staffEmail) {
+          return res.status(400).send({
+            success: false,
+            message: "Staff ID and email are required",
+          });
+        }
+
+        const issue = await issuesCollection.findOne({ _id: id });
+
+        if (!issue) {
+          return res.status(404).send({
+            success: false,
+            message: "Issue not found",
+          });
+        }
+
+        const currentTime = new Date().toISOString();
+
+        const updateResult = await issuesCollection.updateOne(
+          { _id: id },
+          {
+            $set: {
+              assignedTo: {
+                id: staffId,
+                name: staffName,
+                email: staffEmail
+              },
+              status: "assigned",
+              updatedAt: currentTime
+            },
+            $push: {
+              timeline: {
+                status: "assigned",
+                message: `Issue assigned to staff: ${staffName} (${staffEmail})`,
+                updatedBy: "Admin",
+                updatedAt: currentTime
+              }
+            }
+          }
+        );
+
+        if (updateResult.modifiedCount === 0) {
+          return res.status(404).send({
+            success: false,
+            message: "Issue not found or no changes made",
+          });
+        }
+
+        res.send({
+          success: true,
+          message: `Issue assigned to ${staffName}`,
+        });
+      } catch (error) {
+        console.error("Error assigning issue:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to assign issue",
+        });
+      }
+    });
+
+    // Update issue status (for staff)
+    app.post("/issues/:id/update-status", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { status, message, updatedBy, updatedByEmail } = req.body;
+
+        if (!status) {
+          return res.status(400).send({
+            success: false,
+            message: "Status is required",
+          });
+        }
+
+        const issue = await issuesCollection.findOne({ _id: id });
+
+        if (!issue) {
+          return res.status(404).send({
+            success: false,
+            message: "Issue not found",
+          });
+        }
+
+        const currentTime = new Date().toISOString();
+        const statusMessage = message || `Status changed to ${status}`;
+        const updatedByName = updatedBy || "Staff";
+
+        const updates = {
+          status: status,
+          updatedAt: currentTime
+        };
+
+        // If resolved, add resolved timestamp
+        if (status.toLowerCase() === "resolved") {
+          updates.resolvedAt = currentTime;
+          updates.progress = 100;
+        }
+
+        const updateResult = await issuesCollection.updateOne(
+          { _id: id },
+          {
+            $set: updates,
+            $push: {
+              timeline: {
+                status: status,
+                message: statusMessage,
+                updatedBy: updatedByName,
+                updatedAt: currentTime
+              }
+            }
+          }
+        );
+
+        if (updateResult.modifiedCount === 0) {
+          return res.status(404).send({
+            success: false,
+            message: "Issue not found or no changes made",
+          });
+        }
+
+        res.send({
+          success: true,
+          message: `Issue status updated to ${status}`,
+        });
+      } catch (error) {
+        console.error("Error updating issue status:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to update issue status",
+        });
+      }
+    });
+
     app.post("/issues/:id/upvote", async (req, res) => {
       try {
         const { id } = req.params;
@@ -852,14 +1251,15 @@ app.get("/", (req, res) => {
     endpoints: {
       test: "GET /test",
       users: "POST /users, GET /users, GET /users/:email",
+      staff: "GET /staff, GET /staff/issues, GET /staff/dashboard-stats",
+      userAuth: "POST /validate-user, GET /user-dashboard-info/:email, GET /check-role/:email",
       payments: "POST /create-payment, GET /payments, GET /payments/user/:email, GET /payments/stats",
       issues:
         "GET /issues, POST /issues, GET /issues/:id, DELETE /issues/:id, PATCH /issues/:id",
+      issueActions: "POST /issues/:id/assign, POST /issues/:id/update-status, POST /issues/:id/upvote",
       myIssues: "GET /my-issues?email=user@example.com",
-      upvote: "POST /issues/:id/upvote",
       stats: "GET /issues-stats",
       updateRole: "POST /update-role",
-      checkRole: "GET /check-role/:email",
     },
   });
 });
