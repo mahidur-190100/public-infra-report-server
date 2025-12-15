@@ -120,6 +120,7 @@ async function run() {
     });
 
     // Validate user and return proper dashboard info
+    // In your server.js, update the /validate-user endpoint (around line 135):
     app.post("/validate-user", async (req, res) => {
       try {
         const { email, uid } = req.body;
@@ -175,6 +176,8 @@ async function run() {
             name: user.name || user.displayName,
             id: user._id || email,
             createdAt: user.createdAt,
+            // Return the actual user ID for checking ownership
+            userId: user._id?.toString() || email,
           },
           dashboard: {
             type: dashboardType,
@@ -1191,7 +1194,235 @@ async function run() {
       }
     });
 
+    // Update the upvote endpoint (around line 740-800)
     app.post("/issues/:id/upvote", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { userId, userEmail, userRole } = req.body;
+
+        if (!userId) {
+          return res.status(400).send({
+            success: false,
+            message: "User ID is required",
+          });
+        }
+
+        const issue = await issuesCollection.findOne({ _id: id });
+
+        if (!issue) {
+          return res.status(404).send({
+            success: false,
+            message: "Issue not found",
+          });
+        }
+
+        // Get user info to check restrictions
+        let user = null;
+        if (userEmail) {
+          user = await userCollection.findOne({ email: userEmail });
+        } else if (userId.includes("@")) {
+          // userId might be email
+          user = await userCollection.findOne({ email: userId });
+        } else {
+          user = await userCollection.findOne({ _id: new ObjectId(userId) });
+        }
+
+        // Check if user exists
+        if (!user) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        const userRoleFromDB = user.role || "user";
+        const userEmailFromDB = user.email;
+
+        // RULE 1: Admin and Staff cannot upvote
+        if (userRoleFromDB === "admin" || userRoleFromDB === "staff") {
+          return res.status(403).send({
+            success: false,
+            message: "Admin and staff members cannot upvote issues",
+            canUpvote: false,
+            reason: "role_restriction",
+          });
+        }
+
+        // RULE 2: User cannot upvote their own issue
+        // Check by email (most reliable)
+        if (
+          issue.userEmail &&
+          userEmailFromDB &&
+          issue.userEmail.toLowerCase() === userEmailFromDB.toLowerCase()
+        ) {
+          return res.status(403).send({
+            success: false,
+            message: "You cannot upvote your own issue",
+            canUpvote: false,
+            reason: "own_issue",
+          });
+        }
+
+        // Also check by reportedBy field
+        if (
+          issue.reportedBy &&
+          user.displayName &&
+          issue.reportedBy.toLowerCase() === user.displayName.toLowerCase()
+        ) {
+          return res.status(403).send({
+            success: false,
+            message: "You cannot upvote your own issue",
+            canUpvote: false,
+            reason: "own_issue",
+          });
+        }
+
+        // If user has no email in profile, check by userId in issue
+        if (issue.userId && issue.userId === user._id?.toString()) {
+          return res.status(403).send({
+            success: false,
+            message: "You cannot upvote your own issue",
+            canUpvote: false,
+            reason: "own_issue",
+          });
+        }
+
+        const currentUpvotedBy = issue.upvotedBy || [];
+
+        let updatedIssue;
+        let hasUpvoted;
+
+        if (currentUpvotedBy.includes(userId)) {
+          // Remove upvote
+          updatedIssue = await issuesCollection.findOneAndUpdate(
+            { _id: id },
+            {
+              $inc: { upvotes: -1 },
+              $pull: { upvotedBy: userId },
+            },
+            { returnDocument: "after" }
+          );
+          hasUpvoted = false;
+        } else {
+          // Add upvote
+          updatedIssue = await issuesCollection.findOneAndUpdate(
+            { _id: id },
+            {
+              $inc: { upvotes: 1 },
+              $push: { upvotedBy: userId },
+            },
+            { returnDocument: "after" }
+          );
+          hasUpvoted = true;
+        }
+
+        res.send({
+          success: true,
+          upvotes: updatedIssue.upvotes,
+          hasUpvoted: hasUpvoted,
+          canUpvote: true,
+          userRole: userRoleFromDB,
+          message: hasUpvoted ? "Upvoted successfully" : "Upvote removed",
+        });
+      } catch (error) {
+        console.error("Upvote error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Server error",
+        });
+      }
+    });
+
+    // Also add a helper endpoint to check if user can upvote
+    app.post("/issues/:id/can-upvote", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { userId, userEmail } = req.body;
+
+        if (!userId || !userEmail) {
+          return res.status(400).send({
+            success: false,
+            message: "User ID and email are required",
+          });
+        }
+
+        const issue = await issuesCollection.findOne({ _id: id });
+
+        if (!issue) {
+          return res.status(404).send({
+            success: false,
+            message: "Issue not found",
+          });
+        }
+
+        const user = await userCollection.findOne({ email: userEmail });
+
+        if (!user) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        const userRole = user.role || "user";
+
+        // Check restrictions
+        let canUpvote = true;
+        let reason = "";
+        let message = "You can upvote this issue";
+
+        // Rule 1: Admin/Staff cannot upvote
+        if (userRole === "admin" || userRole === "staff") {
+          canUpvote = false;
+          reason = "role_restriction";
+          message = "Admin and staff cannot upvote issues";
+        }
+        // Rule 2: User cannot upvote their own issue
+        else if (
+          issue.userEmail &&
+          issue.userEmail.toLowerCase() === userEmail.toLowerCase()
+        ) {
+          canUpvote = false;
+          reason = "own_issue";
+          message = "You cannot upvote your own issue";
+        } else if (
+          issue.reportedBy &&
+          user.displayName &&
+          issue.reportedBy.toLowerCase() === user.displayName.toLowerCase()
+        ) {
+          canUpvote = false;
+          reason = "own_issue";
+          message = "You cannot upvote your own issue";
+        }
+
+        // Check if already upvoted
+        const hasUpvoted = issue.upvotedBy && issue.upvotedBy.includes(userId);
+
+        res.send({
+          success: true,
+          canUpvote: canUpvote,
+          reason: reason,
+          message: message,
+          hasUpvoted: hasUpvoted || false,
+          userRole: userRole,
+          issue: {
+            reporterEmail: issue.userEmail,
+            reporterName: issue.reportedBy,
+          },
+        });
+      } catch (error) {
+        console.error("Can-upvote check error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Server error",
+        });
+      }
+    });
+
+    // ========== EDIT & DELETE ENDPOINTS WITH RESTRICTIONS ==========
+
+    // Check if user can edit/delete an issue
+    app.post("/issues/:id/check-permissions", async (req, res) => {
       try {
         const { id } = req.params;
         const { userId } = req.body;
@@ -1212,40 +1443,68 @@ async function run() {
           });
         }
 
-        const currentUpvotedBy = issue.upvotedBy || [];
-
-        let updatedIssue;
-        let hasUpvoted;
-
-        if (currentUpvotedBy.includes(userId)) {
-          updatedIssue = await issuesCollection.findOneAndUpdate(
-            { _id: id },
-            {
-              $inc: { upvotes: -1 },
-              $pull: { upvotedBy: userId },
-            },
-            { returnDocument: "after" }
-          );
-          hasUpvoted = false;
+        // Get user info
+        let user = null;
+        if (userId.includes("@")) {
+          user = await userCollection.findOne({ email: userId });
         } else {
-          updatedIssue = await issuesCollection.findOneAndUpdate(
-            { _id: id },
-            {
-              $inc: { upvotes: 1 },
-              $push: { upvotedBy: userId },
-            },
-            { returnDocument: "after" }
-          );
-          hasUpvoted = true;
+          try {
+            user = await userCollection.findOne({ _id: new ObjectId(userId) });
+          } catch (error) {
+            user = await userCollection.findOne({ email: userId });
+          }
         }
+
+        if (!user) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        const userRole = user.role || "user";
+        const userEmail = user.email || userId;
+
+        // Check if user is the reporter
+        const isReporter =
+          (issue.userEmail &&
+            userEmail &&
+            issue.userEmail.toLowerCase() === userEmail.toLowerCase()) ||
+          (issue.reportedBy &&
+            user.displayName &&
+            issue.reportedBy.toLowerCase() === user.displayName.toLowerCase());
+
+        // Permissions:
+        // - Admin can edit/delete any issue
+        // - Staff can edit status/assign but not delete
+        // - Users can only edit/delete their own issues
+        const canEdit =
+          userRole === "admin" ||
+          userRole === "staff" ||
+          (userRole === "user" && isReporter);
+
+        const canDelete =
+          userRole === "admin" || (userRole === "user" && isReporter);
 
         res.send({
           success: true,
-          upvotes: updatedIssue.upvotes,
-          hasUpvoted: hasUpvoted,
+          permissions: {
+            canEdit: canEdit,
+            canDelete: canDelete,
+            canUpdateStatus: userRole === "admin" || userRole === "staff",
+            canAssign: userRole === "admin",
+            isReporter: isReporter,
+            userRole: userRole,
+            issueOwner: issue.userEmail || issue.reportedBy,
+          },
+          issue: {
+            reporterEmail: issue.userEmail,
+            reporterName: issue.reportedBy,
+            status: issue.status,
+          },
         });
       } catch (error) {
-        console.error("Upvote error:", error);
+        console.error("Permission check error:", error);
         res.status(500).send({
           success: false,
           message: "Server error",
@@ -1253,31 +1512,212 @@ async function run() {
       }
     });
 
-    app.get("/issues/user/:email", async (req, res) => {
+    // Update issue (with restrictions)
+
+    app.patch("/issues/:id", async (req, res) => {
       try {
-        const { email } = req.params;
+        const { id } = req.params;
+        const updates = req.body;
 
-        const query = {
-          $or: [{ userEmail: email }, { reportedBy: email }],
-        };
+        // Extract user info for permission check (optional)
+        const userId = updates.userId;
+        const updateType = updates.updateType || "general";
 
-        const cursor = issuesCollection.find(query);
-        const result = await cursor.toArray();
+        // Remove auth info from updates to avoid storing in issue
+        delete updates.userId;
+        delete updates.updateType;
+        delete updates.userRole;
+        delete updates.userEmail;
 
-        res.send({
-          success: true,
-          count: result.length,
-          issues: result,
-        });
+        updates.updatedAt = new Date().toISOString();
+
+        // Get the issue first
+        const issue = await issuesCollection.findOne({ _id: id });
+
+        if (!issue) {
+          return res.status(404).send({
+            success: false,
+            message: "Issue not found",
+          });
+        }
+
+        // If userId is provided, check permissions
+        if (userId) {
+          // Get user info
+          let user = null;
+          if (userId.includes("@")) {
+            user = await userCollection.findOne({ email: userId });
+          } else {
+            try {
+              user = await userCollection.findOne({
+                _id: new ObjectId(userId),
+              });
+            } catch (error) {
+              user = await userCollection.findOne({ email: userId });
+            }
+          }
+
+          if (!user) {
+            return res.status(404).send({
+              success: false,
+              message: "User not found",
+            });
+          }
+
+          const userRole = user.role || "user";
+          const userEmail = user.email || userId;
+          const userName =
+            user.displayName || user.name || userId.split("@")[0];
+
+          // Check if user is the reporter
+          const isReporter =
+            (issue.userEmail &&
+              userEmail &&
+              issue.userEmail.toLowerCase() === userEmail.toLowerCase()) ||
+            (issue.reportedBy &&
+              user.displayName &&
+              issue.reportedBy.toLowerCase() ===
+                user.displayName.toLowerCase());
+
+          // Determine allowed updates based on user role
+          const allowedUpdates = {};
+          let timelineEntry = null;
+
+          if (userRole === "admin") {
+            // Admin can update anything
+            Object.assign(allowedUpdates, updates);
+            timelineEntry = {
+              status: updates.status || issue.status,
+              message: "Issue updated by administrator",
+              updatedBy: userName,
+              updatedAt: updates.updatedAt,
+            };
+          } else if (userRole === "staff") {
+            // Staff can only update status, progress, assignedTo, and comments
+            if (updates.status) allowedUpdates.status = updates.status;
+            if (updates.progress !== undefined)
+              allowedUpdates.progress = updates.progress;
+            if (updates.assignedTo)
+              allowedUpdates.assignedTo = updates.assignedTo;
+            if (updates.comments) allowedUpdates.comments = updates.comments;
+
+            // Add timeline entry for significant updates
+            if (updates.status && updates.status !== issue.status) {
+              timelineEntry = {
+                status: updates.status,
+                message: `Status changed to ${updates.status} by staff`,
+                updatedBy: userName,
+                updatedAt: updates.updatedAt,
+              };
+
+              // If resolved, add resolved timestamp
+              if (updates.status.toLowerCase() === "resolved") {
+                allowedUpdates.resolvedAt = updates.updatedAt;
+                allowedUpdates.progress = 100;
+              }
+            } else if (Object.keys(allowedUpdates).length > 0) {
+              timelineEntry = {
+                status: issue.status,
+                message: "Issue details updated by staff",
+                updatedBy: userName,
+                updatedAt: updates.updatedAt,
+              };
+            }
+          } else if (userRole === "user" && isReporter) {
+            // Users can only update their own issues' basic info
+            if (updates.title) allowedUpdates.title = updates.title;
+            if (updates.description)
+              allowedUpdates.description = updates.description;
+            if (updates.category) allowedUpdates.category = updates.category;
+            if (updates.location) allowedUpdates.location = updates.location;
+            if (updates.image) allowedUpdates.image = updates.image;
+            if (updates.priority) allowedUpdates.priority = updates.priority;
+
+            // Add timeline entry
+            if (Object.keys(allowedUpdates).length > 0) {
+              timelineEntry = {
+                status: issue.status,
+                message: "Issue details updated by reporter",
+                updatedBy: userName,
+                updatedAt: updates.updatedAt,
+              };
+            }
+          } else {
+            return res.status(403).send({
+              success: false,
+              message: "You don't have permission to edit this issue",
+            });
+          }
+
+          // Add updatedAt to allowed updates
+          allowedUpdates.updatedAt = updates.updatedAt;
+
+          // Validate that there are updates to make
+          if (
+            Object.keys(allowedUpdates).length === 1 &&
+            allowedUpdates.updatedAt
+          ) {
+            return res.status(400).send({
+              success: false,
+              message: "No valid updates provided for your user role",
+            });
+          }
+
+          // Add timeline entry if exists
+          if (timelineEntry) {
+            allowedUpdates.$push = { timeline: timelineEntry };
+          }
+
+          const result = await issuesCollection.updateOne(
+            { _id: id },
+            { $set: allowedUpdates }
+          );
+
+          if (result.modifiedCount === 0) {
+            return res.status(404).send({
+              success: false,
+              message: "Issue not found or no changes made",
+            });
+          }
+
+          // Get updated issue
+          const updatedIssue = await issuesCollection.findOne({ _id: id });
+
+          return res.send({
+            success: true,
+            message: "Issue updated successfully",
+            data: updatedIssue,
+            userRole: userRole,
+            isReporter: isReporter,
+          });
+        } else {
+          // No userId provided - use original behavior (backward compatibility)
+          const result = await issuesCollection.updateOne(
+            { _id: id },
+            { $set: updates }
+          );
+
+          if (result.modifiedCount === 0) {
+            return res.status(404).send({
+              success: false,
+              message: "Issue not found or no changes made",
+            });
+          }
+
+          res.send({
+            success: true,
+            message: "Issue updated successfully",
+          });
+        }
       } catch (error) {
-        console.error("Error searching user issues:", error);
+        console.error("Error updating issue:", error);
         res.status(500).send({
           success: false,
-          message: "Failed to search user issues",
+          message: "Failed to update issue",
+          error: error.message,
         });
       }
     });
-
     // ========== SEARCH & FILTER ENDPOINTS ==========
 
     // Get unique categories for filter dropdown
