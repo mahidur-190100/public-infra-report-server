@@ -823,6 +823,294 @@ async function run() {
       }
     });
 
+    // Get all pending issues (for admin to reject)
+    app.get("/issues/pending", async (req, res) => {
+      try {
+        // Get issues that are pending (not in progress, not resolved, not rejected)
+        const query = {
+          status: {
+            $regex: /^pending$/i,
+          },
+        };
+
+        const cursor = issuesCollection.find(query).sort({ reportedAt: -1 });
+        const issues = await cursor.toArray();
+
+        res.send({
+          success: true,
+          count: issues.length,
+          issues: issues,
+        });
+      } catch (error) {
+        console.error("Error fetching pending issues:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch pending issues",
+        });
+      }
+    });
+
+    // Get rejected issues
+    app.get("/issues/rejected", async (req, res) => {
+      try {
+        const query = {
+          status: {
+            $regex: /^rejected$/i,
+          },
+        };
+
+        const cursor = issuesCollection.find(query).sort({ rejectedAt: -1 });
+        const issues = await cursor.toArray();
+
+        res.send({
+          success: true,
+          count: issues.length,
+          issues: issues,
+        });
+      } catch (error) {
+        console.error("Error fetching rejected issues:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch rejected issues",
+        });
+      }
+    });
+
+    // Reject an issue (admin only)
+    app.post("/issues/:id/reject", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { userId, rejectionReason } = req.body;
+
+        if (!userId) {
+          return res.status(400).send({
+            success: false,
+            message: "User ID is required",
+          });
+        }
+
+        const issue = await issuesCollection.findOne({ _id: id });
+
+        if (!issue) {
+          return res.status(404).send({
+            success: false,
+            message: "Issue not found",
+          });
+        }
+
+        // Get user info to check if admin
+        let user = null;
+        if (userId.includes("@")) {
+          user = await userCollection.findOne({ email: userId });
+        } else {
+          try {
+            user = await userCollection.findOne({ _id: new ObjectId(userId) });
+          } catch (error) {
+            user = await userCollection.findOne({ email: userId });
+          }
+        }
+
+        if (!user) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        const userRole = user.role || "user";
+        const userName = user.displayName || user.name || "Admin";
+
+        // Only admin can reject issues
+        if (userRole !== "admin") {
+          return res.status(403).send({
+            success: false,
+            message: "Only administrators can reject issues",
+          });
+        }
+
+        // Check if issue is already rejected
+        if (issue.status && issue.status.toLowerCase() === "rejected") {
+          return res.status(400).send({
+            success: false,
+            message: "Issue is already rejected",
+          });
+        }
+
+        // Check if issue is already in progress or resolved
+        if (
+          issue.status &&
+          (issue.status.toLowerCase() === "in progress" ||
+            issue.status.toLowerCase() === "in-progress" ||
+            issue.status.toLowerCase() === "resolved")
+        ) {
+          return res.status(400).send({
+            success: false,
+            message: `Cannot reject issue with status: ${issue.status}`,
+          });
+        }
+
+        const currentTime = new Date().toISOString();
+        const reason = rejectionReason || "Issue rejected by administrator";
+
+        // Update issue status to rejected
+        const result = await issuesCollection.updateOne(
+          { _id: id },
+          {
+            $set: {
+              status: "rejected",
+              rejectionReason: reason,
+              rejectedAt: currentTime,
+              rejectedBy: userName,
+              updatedAt: currentTime,
+            },
+            $push: {
+              timeline: {
+                status: "rejected",
+                message: reason,
+                updatedBy: userName,
+                updatedAt: currentTime,
+              },
+            },
+          }
+        );
+
+        if (result.modifiedCount === 0) {
+          return res.status(404).send({
+            success: false,
+            message: "Issue not found or no changes made",
+          });
+        }
+
+        // Get updated issue
+        const updatedIssue = await issuesCollection.findOne({ _id: id });
+
+        res.send({
+          success: true,
+          message: "Issue rejected successfully",
+          issue: updatedIssue,
+          userRole: userRole,
+          timestamp: currentTime,
+        });
+      } catch (error) {
+        console.error("Error rejecting issue:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to reject issue",
+        });
+      }
+    });
+
+    // Undo rejection (admin only)
+    app.post("/issues/:id/undo-reject", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { userId } = req.body;
+
+        if (!userId) {
+          return res.status(400).send({
+            success: false,
+            message: "User ID is required",
+          });
+        }
+
+        const issue = await issuesCollection.findOne({ _id: id });
+
+        if (!issue) {
+          return res.status(404).send({
+            success: false,
+            message: "Issue not found",
+          });
+        }
+
+        // Get user info to check if admin
+        let user = null;
+        if (userId.includes("@")) {
+          user = await userCollection.findOne({ email: userId });
+        } else {
+          try {
+            user = await userCollection.findOne({ _id: new ObjectId(userId) });
+          } catch (error) {
+            user = await userCollection.findOne({ email: userId });
+          }
+        }
+
+        if (!user) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        const userRole = user.role || "user";
+        const userName = user.displayName || user.name || "Admin";
+
+        // Only admin can undo rejection
+        if (userRole !== "admin") {
+          return res.status(403).send({
+            success: false,
+            message: "Only administrators can undo rejection",
+          });
+        }
+
+        // Check if issue is actually rejected
+        if (!issue.status || issue.status.toLowerCase() !== "rejected") {
+          return res.status(400).send({
+            success: false,
+            message: "Issue is not rejected",
+          });
+        }
+
+        const currentTime = new Date().toISOString();
+
+        // Update issue status back to pending
+        const result = await issuesCollection.updateOne(
+          { _id: id },
+          {
+            $set: {
+              status: "pending",
+              updatedAt: currentTime,
+            },
+            $unset: {
+              rejectionReason: "",
+              rejectedAt: "",
+              rejectedBy: "",
+            },
+            $push: {
+              timeline: {
+                status: "pending",
+                message: "Rejection undone by administrator",
+                updatedBy: userName,
+                updatedAt: currentTime,
+              },
+            },
+          }
+        );
+
+        if (result.modifiedCount === 0) {
+          return res.status(404).send({
+            success: false,
+            message: "Issue not found or no changes made",
+          });
+        }
+
+        // Get updated issue
+        const updatedIssue = await issuesCollection.findOne({ _id: id });
+
+        res.send({
+          success: true,
+          message: "Rejection undone successfully",
+          issue: updatedIssue,
+          userRole: userRole,
+        });
+      } catch (error) {
+        console.error("Error undoing rejection:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to undo rejection",
+        });
+      }
+    });
+
     // Get all staff members
     app.get("/staff", async (req, res) => {
       try {
@@ -1718,6 +2006,156 @@ async function run() {
         });
       }
     });
+
+    // ========== BOOST PAYMENT ENDPOINTS ==========
+
+    // Create boost_payment collection
+    const boostPaymentCollection = db.collection("boost_payment");
+
+    // Process boost payment
+    app.post("/boost-payment", async (req, res) => {
+      try {
+        const boostData = req.body;
+
+        console.log(
+          "🚀 Processing boost payment for issue:",
+          boostData.issueId
+        );
+
+        // Validate required fields
+        if (!boostData.issueId || !boostData.userEmail || !boostData.amount) {
+          return res.status(400).send({
+            success: false,
+            message: "Issue ID, user email, and amount are required",
+          });
+        }
+
+        // Generate unique IDs
+        const boostId = new ObjectId().toString();
+        const transactionId = `BOOST-${Date.now()}-${Math.floor(
+          1000 + Math.random() * 9000
+        )}`;
+
+        // Create complete boost payment document
+        const completeBoostData = {
+          _id: boostId,
+          issueId: boostData.issueId,
+          issueTitle: boostData.issueTitle,
+          userId: boostData.userId || boostData.userEmail,
+          userName: boostData.userName || boostData.userEmail.split("@")[0],
+          userEmail: boostData.userEmail,
+          amount: parseInt(boostData.amount) || 100,
+          currency: boostData.currency || "INR",
+          status: "completed",
+          paymentMethod: boostData.paymentMethod || "Card",
+          cardLastFour: boostData.cardLastFour || null,
+          transactionId: transactionId,
+          boostType: boostData.boostType || "priority_boost",
+          oldPriority: boostData.oldPriority || "normal",
+          newPriority: boostData.newPriority || "high",
+          paymentDate: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          metadata: boostData.metadata || {},
+        };
+
+        // Save to boost_payment collection
+        const boostResult = await boostPaymentCollection.insertOne(
+          completeBoostData
+        );
+
+        console.log(
+          `✅ Boost payment recorded successfully for ${boostData.userEmail}`
+        );
+        console.log(`💰 Amount: ₹${completeBoostData.amount}`);
+        console.log(
+          `🎯 Priority: ${completeBoostData.oldPriority} → ${completeBoostData.newPriority}`
+        );
+
+        res.send({
+          success: true,
+          message: "Boost payment recorded successfully",
+          boostId: boostResult.insertedId,
+          transactionId: transactionId,
+          boost: completeBoostData,
+        });
+      } catch (error) {
+        console.error("❌ Error creating boost payment:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to record boost payment",
+          error: error.message,
+        });
+      }
+    });
+
+    // Get boost payments by user email
+    app.get("/boost-payments/user/:email", async (req, res) => {
+      try {
+        const { email } = req.params;
+
+        const cursor = boostPaymentCollection
+          .find({ userEmail: email })
+          .sort({ paymentDate: -1 });
+        const payments = await cursor.toArray();
+
+        res.send({
+          success: true,
+          count: payments.length,
+          payments: payments,
+        });
+      } catch (error) {
+        console.error("Error fetching boost payments:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch boost payments",
+        });
+      }
+    });
+
+    // Get boost payments by issue ID
+    app.get("/boost-payments/issue/:issueId", async (req, res) => {
+      try {
+        const { issueId } = req.params;
+
+        const payments = await boostPaymentCollection
+          .find({ issueId: issueId })
+          .toArray();
+
+        res.send({
+          success: true,
+          count: payments.length,
+          payments: payments,
+        });
+      } catch (error) {
+        console.error("Error fetching issue boost payments:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch issue boost payments",
+        });
+      }
+    });
+
+    // Get all boost payments (for admin)
+    app.get("/boost-payments", async (req, res) => {
+      try {
+        const cursor = boostPaymentCollection.find().sort({ paymentDate: -1 });
+        const payments = await cursor.toArray();
+
+        res.send({
+          success: true,
+          count: payments.length,
+          payments: payments,
+        });
+      } catch (error) {
+        console.error("Error fetching boost payments:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch boost payments",
+        });
+      }
+    });
+
     // ========== SEARCH & FILTER ENDPOINTS ==========
 
     // Get unique categories for filter dropdown
