@@ -1278,6 +1278,190 @@ async function run() {
       }
     });
 
+    // ========== SEARCH & FILTER ENDPOINTS ==========
+
+    // Get unique categories for filter dropdown
+    app.get("/issues/categories", async (req, res) => {
+      try {
+        const categories = await issuesCollection.distinct("category");
+        res.send({
+          success: true,
+          categories: categories.filter(Boolean).sort(), // Remove null/undefined and sort
+        });
+      } catch (error) {
+        console.error("Error fetching categories:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch categories",
+        });
+      }
+    });
+
+    // Get unique locations for filter dropdown
+    app.get("/issues/locations", async (req, res) => {
+      try {
+        const locations = await issuesCollection.distinct("location");
+        res.send({
+          success: true,
+          locations: locations.filter(Boolean).sort(), // Remove null/undefined and sort
+        });
+      } catch (error) {
+        console.error("Error fetching locations:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch locations",
+        });
+      }
+    });
+
+    // Search issues with pagination
+    app.get("/issues/search", async (req, res) => {
+      try {
+        const {
+          search = "",
+          category = "all",
+          status = "all",
+          priority = "all",
+          location = "all",
+          sortBy = "recent",
+          sortOrder = "desc",
+          page = 1,
+          limit = 6,
+        } = req.query;
+
+        // Build query object
+        let query = {};
+
+        // Search in multiple fields
+        if (search && search.trim() !== "") {
+          query.$or = [
+            { title: { $regex: search.trim(), $options: "i" } },
+            { description: { $regex: search.trim(), $options: "i" } },
+            { location: { $regex: search.trim(), $options: "i" } },
+            { reportedBy: { $regex: search.trim(), $options: "i" } },
+          ];
+        }
+
+        // Filter by category
+        if (category && category !== "all") {
+          query.category = { $regex: new RegExp(category, "i") };
+        }
+
+        // Filter by status
+        if (status && status !== "all") {
+          query.status = { $regex: new RegExp(`^${status}$`, "i") };
+        }
+
+        // Filter by priority
+        if (priority && priority !== "all") {
+          query.priority = { $regex: new RegExp(`^${priority}$`, "i") };
+        }
+
+        // Filter by location
+        if (location && location !== "all") {
+          query.location = { $regex: new RegExp(location, "i") };
+        }
+
+        // Sort options
+        let sortOptions = {};
+        switch (sortBy) {
+          case "recent":
+            sortOptions = { reportedAt: sortOrder === "asc" ? 1 : -1 };
+            break;
+          case "upvotes":
+            sortOptions = { upvotes: sortOrder === "asc" ? 1 : -1 };
+            break;
+          case "title":
+            sortOptions = { title: sortOrder === "asc" ? 1 : -1 };
+            break;
+          case "status":
+            sortOptions = { status: sortOrder === "asc" ? 1 : -1 };
+            break;
+          case "priority":
+            sortOptions = {
+              priority: sortOrder === "asc" ? 1 : -1,
+              reportedAt: -1,
+            };
+            break;
+          default:
+            sortOptions = { reportedAt: -1 };
+        }
+
+        // Calculate pagination
+        const currentPage = parseInt(page);
+        const itemsPerPage = parseInt(limit);
+        const skip = (currentPage - 1) * itemsPerPage;
+
+        // Get total count for pagination info
+        const totalItems = await issuesCollection.countDocuments(query);
+        const totalPages = Math.ceil(totalItems / itemsPerPage);
+
+        // Get filtered, sorted, and paginated data
+        const cursor = issuesCollection
+          .find(query)
+          .sort(sortOptions)
+          .skip(skip)
+          .limit(itemsPerPage);
+
+        const issues = await cursor.toArray();
+
+        // Get available filter options for current results
+        const availableCategories = await issuesCollection.distinct(
+          "category",
+          query
+        );
+        const availableStatuses = await issuesCollection.distinct(
+          "status",
+          query
+        );
+        const availablePriorities = await issuesCollection.distinct(
+          "priority",
+          query
+        );
+        const availableLocations = await issuesCollection.distinct(
+          "location",
+          query
+        );
+
+        res.send({
+          success: true,
+          data: {
+            issues: issues,
+            pagination: {
+              currentPage: currentPage,
+              totalPages: totalPages,
+              totalItems: totalItems,
+              itemsPerPage: itemsPerPage,
+              hasNextPage: currentPage < totalPages,
+              hasPrevPage: currentPage > 1,
+            },
+            filters: {
+              availableCategories: availableCategories.filter(Boolean),
+              availableStatuses: availableStatuses.filter(Boolean),
+              availablePriorities: availablePriorities.filter(Boolean),
+              availableLocations: availableLocations.filter(Boolean),
+              appliedFilters: {
+                search: search,
+                category: category,
+                status: status,
+                priority: priority,
+                location: location,
+                sortBy: sortBy,
+                sortOrder: sortOrder,
+              },
+            },
+          },
+        });
+      } catch (error) {
+        console.error("Error in search endpoint:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to search issues",
+          error: error.message,
+        });
+      }
+    });
+
     app.get("/issues-stats", async (req, res) => {
       try {
         const totalIssues = await issuesCollection.countDocuments();
