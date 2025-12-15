@@ -86,7 +86,7 @@ async function run() {
         // Determine dashboard type based on role
         let dashboardType = "user"; // Default
         let redirectPath = "/dashboard";
-        
+
         if (user.role === "admin") {
           dashboardType = "admin";
           redirectPath = "/dashboard/admin";
@@ -107,8 +107,8 @@ async function run() {
           dashboard: {
             type: dashboardType,
             redirectPath: redirectPath,
-            shouldRedirect: dashboardType !== "user"
-          }
+            shouldRedirect: dashboardType !== "user",
+          },
         });
       } catch (error) {
         console.error("Error fetching user dashboard info:", error);
@@ -155,7 +155,7 @@ async function run() {
         // Determine dashboard type based on role
         let dashboardType = "user";
         let redirectPath = "/dashboard";
-        
+
         if (user.role === "admin") {
           dashboardType = "admin";
           redirectPath = "/dashboard/admin";
@@ -179,8 +179,8 @@ async function run() {
           dashboard: {
             type: dashboardType,
             redirectPath: redirectPath,
-            shouldRedirect: dashboardType !== "user"
-          }
+            shouldRedirect: dashboardType !== "user",
+          },
         });
       } catch (error) {
         console.error("Error validating user:", error);
@@ -205,22 +205,22 @@ async function run() {
 
         // Build query to find issues assigned to this staff
         let query = {};
-        
+
         if (staffId) {
           // If staffId is provided (could be email or actual ID)
           query = {
             $or: [
               { assignedTo: staffId },
               { "assignedTo.id": staffId },
-              { "assignedTo.email": staffEmail }
-            ]
+              { "assignedTo.email": staffEmail },
+            ],
           };
         } else if (staffEmail) {
           query = {
             $or: [
               { assignedTo: staffEmail },
-              { "assignedTo.email": staffEmail }
-            ]
+              { "assignedTo.email": staffEmail },
+            ],
           };
         }
 
@@ -230,7 +230,7 @@ async function run() {
         res.send({
           success: true,
           count: issues.length,
-          issues: issues
+          issues: issues,
         });
       } catch (error) {
         console.error("Error fetching staff issues:", error);
@@ -255,54 +255,63 @@ async function run() {
 
         // Build query to find issues assigned to this staff
         let query = {};
-        
+
         if (staffId) {
           query = {
             $or: [
               { assignedTo: staffId },
               { "assignedTo.id": staffId },
-              { "assignedTo.email": staffEmail }
-            ]
+              { "assignedTo.email": staffEmail },
+            ],
           };
         } else if (staffEmail) {
           query = {
             $or: [
               { assignedTo: staffEmail },
-              { "assignedTo.email": staffEmail }
-            ]
+              { "assignedTo.email": staffEmail },
+            ],
           };
         }
 
         const allIssues = await issuesCollection.find(query).toArray();
         const totalIssues = allIssues.length;
-        
+
         // Calculate stats
-        const pendingIssues = allIssues.filter(issue => 
-          issue.status && issue.status.toLowerCase() === 'pending'
+        const pendingIssues = allIssues.filter(
+          (issue) => issue.status && issue.status.toLowerCase() === "pending"
         ).length;
-        
-        const resolvedIssues = allIssues.filter(issue => 
-          issue.status && issue.status.toLowerCase() === 'resolved'
+
+        const resolvedIssues = allIssues.filter(
+          (issue) => issue.status && issue.status.toLowerCase() === "resolved"
         ).length;
-        
-        const inProgressIssues = allIssues.filter(issue => 
-          issue.status && (issue.status.toLowerCase() === 'in-progress' || issue.status.toLowerCase() === 'in progress')
+
+        const inProgressIssues = allIssues.filter(
+          (issue) =>
+            issue.status &&
+            (issue.status.toLowerCase() === "in-progress" ||
+              issue.status.toLowerCase() === "in progress")
         ).length;
-        
+
         // Today's tasks (issues created today or due today)
-        const today = new Date().toISOString().split('T')[0];
-        const todaysTasks = allIssues.filter(issue => {
-          const createdDate = new Date(issue.createdAt || issue.reportedAt).toISOString().split('T')[0];
-          const dueDate = issue.dueDate ? new Date(issue.dueDate).toISOString().split('T')[0] : null;
+        const today = new Date().toISOString().split("T")[0];
+        const todaysTasks = allIssues.filter((issue) => {
+          const createdDate = new Date(issue.createdAt || issue.reportedAt)
+            .toISOString()
+            .split("T")[0];
+          const dueDate = issue.dueDate
+            ? new Date(issue.dueDate).toISOString().split("T")[0]
+            : null;
           return createdDate === today || dueDate === today;
         }).length;
 
         // Weekly resolved (last 7 days)
         const oneWeekAgo = new Date();
         oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-        const weeklyResolved = allIssues.filter(issue => {
-          if (issue.status && issue.status.toLowerCase() === 'resolved') {
-            const resolvedDate = issue.resolvedAt ? new Date(issue.resolvedAt) : new Date(issue.updatedAt);
+        const weeklyResolved = allIssues.filter((issue) => {
+          if (issue.status && issue.status.toLowerCase() === "resolved") {
+            const resolvedDate = issue.resolvedAt
+              ? new Date(issue.resolvedAt)
+              : new Date(issue.updatedAt);
             return resolvedDate >= oneWeekAgo;
           }
           return false;
@@ -311,10 +320,14 @@ async function run() {
         // Calculate average resolution time
         let totalResolutionTime = 0;
         let resolvedCount = 0;
-        
-        allIssues.forEach(issue => {
-          if (issue.status && issue.status.toLowerCase() === 'resolved' && 
-              (issue.createdAt || issue.reportedAt) && issue.resolvedAt) {
+
+        allIssues.forEach((issue) => {
+          if (
+            issue.status &&
+            issue.status.toLowerCase() === "resolved" &&
+            (issue.createdAt || issue.reportedAt) &&
+            issue.resolvedAt
+          ) {
             const created = new Date(issue.createdAt || issue.reportedAt);
             const resolved = new Date(issue.resolvedAt);
             const diffTime = Math.abs(resolved - created);
@@ -323,9 +336,11 @@ async function run() {
             resolvedCount++;
           }
         });
-        
-        const averageResolutionTime = resolvedCount > 0 ? 
-          (totalResolutionTime / resolvedCount).toFixed(1) : 0;
+
+        const averageResolutionTime =
+          resolvedCount > 0
+            ? (totalResolutionTime / resolvedCount).toFixed(1)
+            : 0;
 
         res.send({
           success: true,
@@ -336,8 +351,8 @@ async function run() {
             inProgressIssues: inProgressIssues,
             todaysTasks: todaysTasks,
             weeklyResolved: weeklyResolved,
-            averageResolutionTime: averageResolutionTime
-          }
+            averageResolutionTime: averageResolutionTime,
+          },
         });
       } catch (error) {
         console.error("Error fetching staff dashboard stats:", error);
@@ -348,32 +363,68 @@ async function run() {
       }
     });
 
+    // Get limited resolved issues for home page
+    app.get("/resolved-issues/limit", async (req, res) => {
+      try {
+        const limit = parseInt(req.query.limit) || 6;
+
+        const cursor = issuesCollection
+          .find({
+            status: { $regex: /^resolved$/i },
+          })
+          .sort({ resolvedAt: -1, reportedAt: -1 })
+          .limit(limit);
+
+        const resolvedIssues = await cursor.toArray();
+
+        res.send({
+          success: true,
+          count: resolvedIssues.length,
+          issues: resolvedIssues,
+        });
+      } catch (error) {
+        console.error("Error fetching resolved issues:", error);
+        res.status(500).send({
+          success: false,
+          message: "Failed to fetch resolved issues",
+        });
+      }
+    });
+
     // ========== PAYMENT MANAGEMENT ENDPOINTS ==========
 
     // Create a new payment record
     app.post("/create-payment", async (req, res) => {
       try {
         const paymentData = req.body;
-        
+
         console.log("📱 Creating payment record for:", paymentData.userEmail);
-        
+
         // Validate required fields
-        if (!paymentData.userEmail || !paymentData.amount || !paymentData.planType) {
+        if (
+          !paymentData.userEmail ||
+          !paymentData.amount ||
+          !paymentData.planType
+        ) {
           return res.status(400).send({
             success: false,
-            message: "User email, amount, and plan type are required"
+            message: "User email, amount, and plan type are required",
           });
         }
 
         // Generate unique IDs
         const paymentId = new ObjectId().toString();
-        const invoiceNumber = `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-        const transactionId = `TXN${Date.now()}${paymentData.userEmail.substring(0, 4).toUpperCase()}`;
+        const invoiceNumber = `INV-${new Date().getFullYear()}-${Math.floor(
+          1000 + Math.random() * 9000
+        )}`;
+        const transactionId = `TXN${Date.now()}${paymentData.userEmail
+          .substring(0, 4)
+          .toUpperCase()}`;
 
         // Calculate subscription dates
         const startDate = new Date();
         const endDate = new Date();
-        
+
         if (paymentData.planType === "yearly") {
           endDate.setFullYear(endDate.getFullYear() + 1);
         } else {
@@ -388,8 +439,13 @@ async function run() {
           userEmail: paymentData.userEmail,
           userPhone: paymentData.userPhone || "",
           userRole: paymentData.userRole || "user",
-          plan: paymentData.planType === "yearly" ? "Yearly Premium" : "Monthly Premium",
-          amount: parseInt(paymentData.amount) || (paymentData.planType === "yearly" ? 4999 : 499),
+          plan:
+            paymentData.planType === "yearly"
+              ? "Yearly Premium"
+              : "Monthly Premium",
+          amount:
+            parseInt(paymentData.amount) ||
+            (paymentData.planType === "yearly" ? 4999 : 499),
           currency: "INR",
           status: "completed",
           paymentMethod: paymentData.paymentMethod || "Card",
@@ -401,29 +457,33 @@ async function run() {
           subscriptionEnd: endDate.toISOString(),
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-          metadata: paymentData.metadata || {}
+          metadata: paymentData.metadata || {},
         };
 
         // Save to payments collection
-        const paymentResult = await paymentsCollection.insertOne(completePaymentData);
-        
+        const paymentResult = await paymentsCollection.insertOne(
+          completePaymentData
+        );
+
         // Update user record with premium status
         await userCollection.updateOne(
           { email: paymentData.userEmail },
-          { 
-            $set: { 
+          {
+            $set: {
               isPremium: true,
               subscriptionType: paymentData.planType,
               subscriptionStart: startDate.toISOString(),
               subscriptionEnd: endDate.toISOString(),
               lastPayment: new Date().toISOString(),
               paymentMethod: paymentData.paymentMethod || "Card",
-              updatedAt: new Date().toISOString()
-            } 
+              updatedAt: new Date().toISOString(),
+            },
           }
         );
 
-        console.log(`✅ Payment recorded successfully for ${paymentData.userEmail}`);
+        console.log(
+          `✅ Payment recorded successfully for ${paymentData.userEmail}`
+        );
         console.log(`💰 Amount: ₹${completePaymentData.amount}`);
         console.log(`📋 Invoice: ${invoiceNumber}`);
 
@@ -433,14 +493,14 @@ async function run() {
           paymentId: paymentResult.insertedId,
           invoiceNumber: invoiceNumber,
           transactionId: transactionId,
-          payment: completePaymentData
+          payment: completePaymentData,
         });
       } catch (error) {
         console.error("❌ Error creating payment:", error);
         res.status(500).send({
           success: false,
           message: "Failed to record payment",
-          error: error.message
+          error: error.message,
         });
       }
     });
@@ -454,13 +514,13 @@ async function run() {
         res.send({
           success: true,
           count: payments.length,
-          payments: payments
+          payments: payments,
         });
       } catch (error) {
         console.error("Error fetching payments:", error);
         res.status(500).send({
           success: false,
-          message: "Failed to fetch payments"
+          message: "Failed to fetch payments",
         });
       }
     });
@@ -469,20 +529,22 @@ async function run() {
     app.get("/payments/user/:email", async (req, res) => {
       try {
         const { email } = req.params;
-        
-        const cursor = paymentsCollection.find({ userEmail: email }).sort({ paymentDate: -1 });
+
+        const cursor = paymentsCollection
+          .find({ userEmail: email })
+          .sort({ paymentDate: -1 });
         const payments = await cursor.toArray();
 
         res.send({
           success: true,
           count: payments.length,
-          payments: payments
+          payments: payments,
         });
       } catch (error) {
         console.error("Error fetching user payments:", error);
         res.status(500).send({
           success: false,
-          message: "Failed to fetch user payments"
+          message: "Failed to fetch user payments",
         });
       }
     });
@@ -491,24 +553,29 @@ async function run() {
     app.get("/payments/stats", async (req, res) => {
       try {
         const totalPayments = await paymentsCollection.countDocuments();
-        const completedPayments = await paymentsCollection.countDocuments({ status: "completed" });
-        
+        const completedPayments = await paymentsCollection.countDocuments({
+          status: "completed",
+        });
+
         // Calculate total revenue
         const cursor = paymentsCollection.find({ status: "completed" });
         const allPayments = await cursor.toArray();
-        const totalRevenue = allPayments.reduce((sum, payment) => sum + (payment.amount || 0), 0);
-        
+        const totalRevenue = allPayments.reduce(
+          (sum, payment) => sum + (payment.amount || 0),
+          0
+        );
+
         // Get today's payments
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const tomorrow = new Date(today);
         tomorrow.setDate(tomorrow.getDate() + 1);
-        
+
         const todayPayments = await paymentsCollection.countDocuments({
           paymentDate: {
             $gte: today.toISOString(),
-            $lt: tomorrow.toISOString()
-          }
+            $lt: tomorrow.toISOString(),
+          },
         });
 
         res.send({
@@ -517,14 +584,14 @@ async function run() {
             total: totalPayments,
             completed: completedPayments,
             totalRevenue: totalRevenue,
-            today: todayPayments
-          }
+            today: todayPayments,
+          },
         });
       } catch (error) {
         console.error("Error fetching payment stats:", error);
         res.status(500).send({
           success: false,
-          message: "Failed to fetch payment statistics"
+          message: "Failed to fetch payment statistics",
         });
       }
     });
@@ -580,8 +647,9 @@ async function run() {
             email: updatedUser.email,
             role: updatedUser.role,
             displayName: updatedUser.displayName,
-            dashboardType: role === "staff" ? "staff" : role === "admin" ? "admin" : "user"
-          }
+            dashboardType:
+              role === "staff" ? "staff" : role === "admin" ? "admin" : "user",
+          },
         });
       } catch (error) {
         console.error("Error updating role:", error);
@@ -611,7 +679,12 @@ async function run() {
           role: user.role || "user",
           displayName: user.displayName,
           createdAt: user.createdAt,
-          dashboardType: user.role === "staff" ? "staff" : user.role === "admin" ? "admin" : "user"
+          dashboardType:
+            user.role === "staff"
+              ? "staff"
+              : user.role === "admin"
+              ? "admin"
+              : "user",
         });
       } catch (error) {
         console.error("Error checking role:", error);
@@ -1010,19 +1083,19 @@ async function run() {
               assignedTo: {
                 id: staffId,
                 name: staffName,
-                email: staffEmail
+                email: staffEmail,
               },
               status: "assigned",
-              updatedAt: currentTime
+              updatedAt: currentTime,
             },
             $push: {
               timeline: {
                 status: "assigned",
                 message: `Issue assigned to staff: ${staffName} (${staffEmail})`,
                 updatedBy: "Admin",
-                updatedAt: currentTime
-              }
-            }
+                updatedAt: currentTime,
+              },
+            },
           }
         );
 
@@ -1074,7 +1147,7 @@ async function run() {
 
         const updates = {
           status: status,
-          updatedAt: currentTime
+          updatedAt: currentTime,
         };
 
         // If resolved, add resolved timestamp
@@ -1092,9 +1165,9 @@ async function run() {
                 status: status,
                 message: statusMessage,
                 updatedBy: updatedByName,
-                updatedAt: currentTime
-              }
-            }
+                updatedAt: currentTime,
+              },
+            },
           }
         );
 
@@ -1252,11 +1325,14 @@ app.get("/", (req, res) => {
       test: "GET /test",
       users: "POST /users, GET /users, GET /users/:email",
       staff: "GET /staff, GET /staff/issues, GET /staff/dashboard-stats",
-      userAuth: "POST /validate-user, GET /user-dashboard-info/:email, GET /check-role/:email",
-      payments: "POST /create-payment, GET /payments, GET /payments/user/:email, GET /payments/stats",
+      userAuth:
+        "POST /validate-user, GET /user-dashboard-info/:email, GET /check-role/:email",
+      payments:
+        "POST /create-payment, GET /payments, GET /payments/user/:email, GET /payments/stats",
       issues:
         "GET /issues, POST /issues, GET /issues/:id, DELETE /issues/:id, PATCH /issues/:id",
-      issueActions: "POST /issues/:id/assign, POST /issues/:id/update-status, POST /issues/:id/upvote",
+      issueActions:
+        "POST /issues/:id/assign, POST /issues/:id/update-status, POST /issues/:id/upvote",
       myIssues: "GET /my-issues?email=user@example.com",
       stats: "GET /issues-stats",
       updateRole: "POST /update-role",
