@@ -29,44 +29,6 @@ async function run() {
 
     console.log("Connected to MongoDB successfully!");
 
-    // ========== TEST ENDPOINTS ==========
-    app.get("/test", (req, res) => {
-      res.send({
-        success: true,
-        message: "Server is running",
-        timestamp: new Date().toISOString(),
-      });
-    });
-
-    app.get("/test-mongo", async (req, res) => {
-      try {
-        const testDoc = {
-          _id: "test_" + new Date().getTime(),
-          title: "Test Issue",
-          description: "Testing MongoDB connection",
-          reportedBy: "Test User",
-          userEmail: "test@example.com",
-          status: "pending",
-          reportedAt: new Date().toISOString(),
-        };
-
-        const result = await issuesCollection.insertOne(testDoc);
-
-        res.send({
-          success: true,
-          message: "MongoDB connection successful",
-          insertedId: result.insertedId,
-        });
-      } catch (error) {
-        console.error("MongoDB test error:", error);
-        res.status(500).send({
-          success: false,
-          message: "MongoDB connection failed",
-          error: error.message,
-        });
-      }
-    });
-
     // ========== USER AUTHENTICATION & DASHBOARD ROUTING ==========
 
     // Get user dashboard info based on role
@@ -125,7 +87,7 @@ async function run() {
       try {
         const { email, uid } = req.body;
 
-        console.log(`🔍 Validating user: ${email}, UID: ${uid}`);
+        // console.log(` Validating user: ${email}, UID: ${uid}`);
 
         if (!email) {
           return res.status(400).send({
@@ -145,7 +107,7 @@ async function run() {
         }
 
         if (uid && user.uid && user.uid !== uid) {
-          console.log(`⚠️ UID mismatch for ${email}`);
+          // console.log(` UID mismatch for ${email}`);
           return res.send({
             success: true,
             valid: false,
@@ -401,7 +363,7 @@ async function run() {
       try {
         const paymentData = req.body;
 
-        console.log("📱 Creating payment record for:", paymentData.userEmail);
+        // console.log(" Creating payment record for:", paymentData.userEmail);
 
         // Validate required fields
         if (
@@ -484,11 +446,11 @@ async function run() {
           }
         );
 
-        console.log(
-          `✅ Payment recorded successfully for ${paymentData.userEmail}`
-        );
-        console.log(`💰 Amount: ₹${completePaymentData.amount}`);
-        console.log(`📋 Invoice: ${invoiceNumber}`);
+        // console.log(
+        //   ` Payment recorded successfully for ${paymentData.userEmail}`
+        // );
+        // console.log(`Amount: ₹${completePaymentData.amount}`);
+        // console.log(` Invoice: ${invoiceNumber}`);
 
         res.send({
           success: true,
@@ -499,7 +461,7 @@ async function run() {
           payment: completePaymentData,
         });
       } catch (error) {
-        console.error("❌ Error creating payment:", error);
+        console.error(" Error creating payment:", error);
         res.status(500).send({
           success: false,
           message: "Failed to record payment",
@@ -605,7 +567,7 @@ async function run() {
       try {
         const { email, role } = req.body;
 
-        console.log(`Updating ${email} role to: ${role}`);
+        // console.log(`Updating ${email} role to: ${role}`);
 
         if (!email || !role) {
           return res.status(400).send({
@@ -703,7 +665,7 @@ async function run() {
     app.post("/users", async (req, res) => {
       try {
         const user = req.body;
-        console.log("Creating new user:", user.email);
+        // console.log("Creating new user:", user.email);
 
         if (!user.email) {
           return res.status(400).send({
@@ -2064,13 +2026,13 @@ async function run() {
           completeBoostData
         );
 
-        console.log(
-          `✅ Boost payment recorded successfully for ${boostData.userEmail}`
-        );
-        console.log(`💰 Amount: ₹${completeBoostData.amount}`);
-        console.log(
-          `🎯 Priority: ${completeBoostData.oldPriority} → ${completeBoostData.newPriority}`
-        );
+        // console.log(
+        //   ` Boost payment recorded successfully for ${boostData.userEmail}`
+        // );
+        // console.log(` Amount: ₹${completeBoostData.amount}`);
+        // console.log(
+        //   ` Priority: ${completeBoostData.oldPriority} → ${completeBoostData.newPriority}`
+        // );
 
         res.send({
           success: true,
@@ -2080,7 +2042,7 @@ async function run() {
           boost: completeBoostData,
         });
       } catch (error) {
-        console.error("❌ Error creating boost payment:", error);
+        console.error(" Error creating boost payment:", error);
         res.status(500).send({
           success: false,
           message: "Failed to record boost payment",
@@ -2372,7 +2334,7 @@ async function run() {
     });
 
     await client.db("admin").command({ ping: 1 });
-    console.log("✅ Pinged MongoDB deployment. Connection successful!");
+    console.log("Pinged MongoDB deployment. Connection successful!");
   } catch (error) {
     console.error("Failed to connect to MongoDB:", error);
   }
@@ -2384,7 +2346,6 @@ app.get("/", (req, res) => {
   res.send({
     message: "Public Infrastructure Report Server is running 🚀",
     endpoints: {
-      test: "GET /test",
       users: "POST /users, GET /users, GET /users/:email",
       staff: "GET /staff, GET /staff/issues, GET /staff/dashboard-stats",
       userAuth:
@@ -2403,5 +2364,5 @@ app.get("/", (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`🚀 Server is running on http://localhost:${port}`);
+  console.log(`Server is running on http://localhost:${port}`);
 });
